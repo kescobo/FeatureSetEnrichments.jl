@@ -5,6 +5,10 @@
 
 Both exported from excel file from Cara Bosco / Laurel Gabard-Durnam (email, 5/22/23).
 
+- `Khula_MicrobiomeMetaData_SA_25052023.csv`
+
+Exported from excel file in E-mail from Michal 5/25/23
+
 ## Notes
 
 Me: 
