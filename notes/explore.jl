@@ -93,7 +93,6 @@ sort!(fseas, :qvalue)
 CSV.write(outfile, fseas)
 
 
-
 #-
 
 using CairoMakie
@@ -179,3 +178,67 @@ grid1=GridLayout(fig[1,1])
 plot_fsea!(grid1, aoff_cors[nact["p-Cresol synthesis"]], aoff_cors[Not(nact["p-Cresol synthesis"])]; label="p-Cresol synthesis")
 
 fig
+
+#-
+
+#-
+
+gfs_vep = outerjoin(map(eegvep.file) do f
+    df = CSV.read(f, DataFrame; skipto = 2, header=["feature", replace(basename(f), r"_S\d+_genefamilies\.tsv"=> "")])
+    subset!(df, "feature"=> ByRow(f-> !contains(f, '|')))
+end...; on="feature")
+
+foreach(n-> gfs_vep[!,n] = coalesce.(gfs_vep[!,n], 0.), names(gfs_vep))
+
+#-
+
+fig = Figure(;resolution = (600, 1800))
+
+vep_fseas = DataFrame()
+nact = getneuroactive(replace.(gfs_vep.feature, "UniRef90_"=>""))
+
+i = 0
+
+for eegfeat in ("peak_amp_N1", "peak_latency_N1", "peak_amp_P1", "peak_latency_P1", "peak_amp_N2", "peak_latency_N2")
+    @info eegfeat
+    vep_cors = ThreadsX.map(enumerate(gfs_vep.feature)) do (i, feature)
+        abunds = collect(gfs_vep[i, 2:end])
+        cor(eegvep[!, eegfeat], abunds)
+    end
+
+    df = DataFrame(map(collect(keys(nact))) do gs
+        ixs = nact[gs]
+        isempty(ixs) && return (; cortest = eegfeat, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+        cs = vep_cors[ixs]
+        isempty(cs) && return (; cortest = eegfeat, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+        acs = vep_cors[Not(ixs)]
+        mwu = MannWhitneyUTest(cs, acs)
+        es = enrichment_score(cs, acs)
+
+        if any([(eegfeat == "peak_amp_N1"      && gs == "Menaquinone synthesis"),
+                 (eegfeat == "peak_latency_P1"  && gs == "GABA synthesis"),
+                 (eegfeat == "peak_latency_P1"  && gs == "Glutamate degradation"),
+                 (eegfeat == "peak_amp_N2"      && gs == "Quinolinic acid degradation"),
+                 (eegfeat == "peak_amp_N2"      && gs == "Butyrate synthesis")])
+            global i += 1
+            
+            grid=GridLayout(fig[i,1])
+            plot_fsea!(grid, vep_cors[nact[gs]], aoff_cors[Not(nact[gs])]; label=gs, ylabel="$eegfeat enrichment")
+        end
+
+
+        return (; cortest = eegfeat, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+    end)
+    append!(vep_fseas, df)
+end
+
+subset!(vep_fseas, :pvalue=> ByRow(!isnan))
+transform!(groupby(vep_fseas, :cortest), "pvalue" => (p-> adjust(collect(p), BenjaminiHochberg())) => "qvalue")
+sort!(vep_fseas, :qvalue)
+
+fig
+
+#-
+
