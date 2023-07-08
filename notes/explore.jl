@@ -15,48 +15,93 @@ base = LocalBase()
 
 #-
 
-eegbase."subject_ID"
 
 #-
 
-subjects = let all3 = uids(base["Subjects"]) ∩ eegbase."subject_ID" ∩ metadata."subject_id"
-    [base["Subjects", sub] for sub in all3]
+seqs = let df = DataFrame()
+    subs = filter(!ismissing, map(s-> get(base["Subjects"], "khula-$s", missing), metadata.subject_id))
+    for sub in subs
+       for biosp in get(sub, :Biospecimens, [])
+           biosp = base[biosp]
+           !haskey(biosp, :visit) && continue
+           for seq in get(biosp, :seqprep, [])
+                seq = base[seq]
+                seq[:keep] != 1 && continue
+                push!(df, (; subject_ref = sub[:uid],
+                            subject_id  = replace(sub[:uid], "khula-"=>""),
+                            biospecimen = biosp[:uid],
+                            visit       = first(base[biosp[:visit]])[:uid],
+                            seqprep     = seq[:uid]
+                            )
+               )
+           end
+       end
+   end
+   df
 end
 
-seqs = DataFrame(mapreduce(vcat, base[mapreduce(r-> [b.id for b in base[r[:Biospecimens]]], vcat, subjects)]) do rec
-    sample_id = rec[:uid]
-    subject_id = base[first(rec[:subject])][:uid]
-    seqpreps = base[rec[:seqprep]]
+gfdf = let
+    gffiles = filter(readdir("/grace/sequencing/processed/mgx/humann/main", join=true)) do path
+        file = basename(path)
+        m = match(r"(SEQ\d+)_S\d+_genefamilies.tsv", file)
+        isnothing(m) && return false
+        return m[1] in seqs.seqprep
+    end
 
-    [(; sample_id, subject_id, seq_id = seq[:uid]) for seq in seqpreps]
-end)
-
-leftjoin!(seqs, metadata; on="subject_id")
-genefamilies_files = filter(readdir("/grace/sequencing/processed/mgx/humann/main", join=true)) do path
-    file = basename(path)
-    m = match(r"(SEQ\d+)_S\d+_genefamilies.tsv", file)
-    isnothing(m) && return false
-    return m[1] in seqs.seq_id
+    DataFrame(map(gffiles) do f
+        m = match(r"(SEQ\d+)_(S\d+)_genefamilies.tsv", f)
+        (seqprep, S_well) = m.captures
+        dir = dirname(f)
+        file = basename(f)
+        (; seqprep, S_well, dir, file, path=f)
+    end)
 end
 
-leftjoin!(seqs, DataFrame(seq_id = map(f-> match(r"(SEQ\d+)_S\d+", f)[1], genefamilies_files), file = genefamilies_files); on= "seq_id")
-subset!(seqs, "file"=> ByRow(!ismissing))
-unique!(seqs, "subject_id")
-#-
-
-leftjoin!(eegbase, seqs; on="subject_id")
-subset!(eegbase, "file"=> ByRow(!ismissing))
-leftjoin!(eegvep, seqs; on="subject_id")
-subset!(eegvep, "file"=> ByRow(!ismissing))
+leftjoin!(seqs, gfdf; on="seqprep")
 
 #-
 
-gfs = outerjoin(map(eegbase.file) do f
-    df = CSV.read(f, DataFrame; skipto = 2, header=["feature", replace(basename(f), r"_S\d+_genefamilies\.tsv"=> "")])
+leftjoin!(eegbase, subset(seqs, "visit"=> ByRow(==("3mo"))); on="subject_id")
+subset!(eegbase, "seqprep"=> ByRow(!ismissing))
+
+leftjoin!(eegvep, subset(seqs, "visit"=> ByRow(==("3mo"))); on="subject_id")
+subset!(eegvep, "seqprep"=> ByRow(!ismissing))
+
+#-
+
+prep2sub = Dict(p => s for (p,s) in zip(seqs.seqprep, seqs.subject_id))
+
+gfs = mapreduce(vcat, subset(eegvep, "file"=> ByRow(!ismissing)).path) do f
+    seqprep = replace(basename(f), r"_S\d+_genefamilies\.tsv"=> "")
+    df = CSV.read(f, DataFrame; skipto = 2, header=["feature", "abundance"])
+    df.seqprep .= seqprep
+    df.subject .= prep2sub[seqprep]
     subset!(df, "feature"=> ByRow(f-> !contains(f, '|')))
-end...; on="feature")
+end
 
-foreach(n-> gfs[!,n] = coalesce.(gfs[!,n], 0.), names(gfs))
+gfs_wide = unstack(gfs, "feature", "abundance")
+
+foreach(n-> gfs_wide[!,n] = coalesce.(gfs_wide[!,n], 0.), names(gfs_wide)[3:end])
+leftjoin!(gfs_wide, 
+          select(eegvep, "subject_id"=> "subject", 
+                         "child_sex_0female_1male"=>"sex",
+                         "age_3m_eeg"=> "age_weeks",
+                         "peak_amp_N1",
+                         "peak_latency_N1",
+                         "peak_amp_P1",
+                         "peak_latency_P1",
+                         "peak_amp_N2",
+                         "peak_latency_N2"
+                );
+    on="subject"
+)
+
+select!(gfs_wide, "subject", "seqprep","sex","age_weeks",
+                  "peak_amp_N1","peak_latency_N1",
+                  "peak_amp_P1","peak_latency_P1",
+                  "peak_amp_N2","peak_latency_N2", 
+                  Cols(Not("UNMAPPED"))
+)
 
 #-
 
@@ -65,32 +110,66 @@ using ThreadsX
 include("fsea.jl")
 using .NeuroFSEA
 using MultipleTesting
+using GLM
+using HypothesisTests
 
-aexp_cors = ThreadsX.map(enumerate(gfs.feature)) do (i, feature)
-    abunds = collect(gfs[i, 2:end])
-    cor(eegbase.visual_Average_aper_exponent, abunds)
+function runlms(indf, outfile, respcol, featurecols;
+                formula = term(:func) ~ term(respcol) + term(:age_weeks),
+        )
+
+    lmresults = DataFrame(ThreadsX.map(featurecols) do feature
+        @debug feature
+
+        over0 = indf[!, feature] .> 0
+        ab = collect(indf[!, feature] .+ (minimum(indf[over0, feature])) / 2) # add half-minimum non-zerovalue
+
+        df = select(indf, respcol, "age_weeks")
+        df.func = log.(ab)
+
+        mod = lm(formula, df; dropcollinear=false)
+        ct = DataFrame(coeftable(mod))
+        ct.feature .= feature
+        rename!(ct, "Pr(>|t|)"=>"pvalue", "Lower 95%"=> "lower_95", "Upper 95%"=> "upper_95", "Coef."=> "coef", "Std. Error"=>"std_err")
+        select!(ct, Cols(:feature, :Name, :))
+        return NamedTuple(only(filter(row-> row.Name == respcol, eachrow(ct))))
+    end)
+
+    subset!(lmresults, "pvalue"=> ByRow(!isnan))
+    DataFrames.transform!(lmresults, :pvalue => (col-> MultipleTesting.adjust(collect(col), BenjaminiHochberg())) => :qvalue)
+    sort!(lmresults, :qvalue)
+
+    CSV.write(outfile, lmresults)
+    lmresults
 end
 
-nact = getneuroactive(replace.(gfs.feature, "UniRef90_"=>""))
 
-fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
-    ixs = nact[gs]
-    isempty(ixs) && return (; cortest = "visual_Average_aper_exponent", geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2"]) do eeg_feat 
+    res = runlms(gfs_wide, "$(eeg_feat)_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"))
+    nact = getneuroactive(replace.(res.feature, "UniRef90_"=>""))
 
-    cs = aexp_cors[ixs]
-    isempty(cs) && return (; cortest = "visual_Average_aper_exponent", geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+    fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+        cortest = first(res.Name)
+        ts = res.t
+        
+        ixs = nact[gs]
+        isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
 
-    acs = aexp_cors[Not(ixs)]
-    mwu = MannWhitneyUTest(cs, acs)
-    es = enrichment_score(cs, acs)
+        cs = ts[ixs]
+        isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
 
-    return (; cortest = "visual_Average_aper_exponent", geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
-end)
+        acs = ts[Not(ixs)]
+        mwu = MannWhitneyUTest(cs, acs)
+        es = enrichment_score(cs, acs)
 
-subset!(fseas, :pvalue=> ByRow(!isnan))
-fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
-sort!(fseas, :qvalue)
-CSV.write(outfile, fseas)
+        return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+    end)
+
+    subset!(fseas, :pvalue=> ByRow(!isnan))
+    fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+    sort!(fseas, :qvalue)
+    CSV.write("$(eeg_feat)_gsea.csv", fseas)
+    fseas
+end
 
 
 #-
