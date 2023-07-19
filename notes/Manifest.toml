@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.9.1"
+julia_version = "1.9.2"
 manifest_format = "2.0"
 project_hash = "fd4f23a9b26a454218e5eb183abca6a4f733a685"
 
@@ -227,7 +227,7 @@ version = "3.46.2"
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.0.2+0"
+version = "1.0.5+0"
 
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
@@ -1060,7 +1060,7 @@ version = "0.40.1+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "Random", "SHA", "Serialization", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.9.0"
+version = "1.9.2"
 
 [[deps.PkgVersion]]
 deps = ["Pkg"]
@@ -1504,11 +1504,9 @@ version = "0.4.1"
 
 [[deps.VKCComputing]]
 deps = ["Airtable", "BiobakeryUtils", "CSV", "Chain", "DataFrames", "Dates", "Dictionaries", "JSON3", "Preferences", "TestItems", "ThreadsX", "TimeZones"]
-git-tree-sha1 = "fc3a93672532bc201ca0ef95b96379aaf3bbad88"
-repo-rev = "more-convenience"
-repo-url = "git@github.com:Klepac-Ceraj-Lab/VKCComputing.jl.git"
+git-tree-sha1 = "54181ed11617bf3ed27365fd7595b882496a371d"
 uuid = "329a1d7f-a79a-43b8-8671-feb503123859"
-version = "0.1.3"
+version = "0.2.0"
 
 [[deps.VersionParsing]]
 git-tree-sha1 = "58d6e80b4ee071f5efd07fda82cb9fbe17200868"

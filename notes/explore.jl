@@ -13,6 +13,8 @@ select!(metadata, "subject_id", "zymo_code_3m"=> "zymo", "age_zymo_3m_wks"=> "ag
 # If new environment, requires running `VKCComputing.set_readonly_pat!()` and `VKCComputing.set_airtable_dir!()`
 base = LocalBase()
 
+# `Number_Segs_Post-Seg_Rej` = number of retained trials
+
 #-
 
 
@@ -86,6 +88,7 @@ leftjoin!(gfs_wide,
           select(eegvep, "subject_id"=> "subject", 
                          "child_sex_0female_1male"=>"sex",
                          "age_3m_eeg"=> "age_weeks",
+                         "Number_Segs_Post-Seg_Rej" => "trials",
                          "peak_amp_N1",
                          "peak_latency_N1",
                          "peak_amp_P1",
@@ -96,7 +99,7 @@ leftjoin!(gfs_wide,
     on="subject"
 )
 
-select!(gfs_wide, "subject", "seqprep","sex","age_weeks",
+select!(gfs_wide, "subject", "seqprep","sex","age_weeks", "trials",
                   "peak_amp_N1","peak_latency_N1",
                   "peak_amp_P1","peak_latency_P1",
                   "peak_amp_N2","peak_latency_N2", 
@@ -113,23 +116,26 @@ using MultipleTesting
 using GLM
 using HypothesisTests
 
+#-
+
 function runlms(indf, outfile, respcol, featurecols;
-                formula = term(:func) ~ term(respcol) + term(:age_weeks),
+                formula = term(:func) ~ term(respcol) + term(:age_weeks) + term(:trials),
         )
-
+        @debug "Respcol: $respcol"
     lmresults = DataFrame(ThreadsX.map(featurecols) do feature
-        @debug feature
+        # @debug "Feature: $feature"
 
+        # ab = collect(indf[!, feature] .+ (minimum(indf[over0, feature])) / 2) # add half-minimum non-zerovalue
+        df = select(indf, respcol, "age_weeks", "trials")
         over0 = indf[!, feature] .> 0
-        ab = collect(indf[!, feature] .+ (minimum(indf[over0, feature])) / 2) # add half-minimum non-zerovalue
+        
+        df.func = over0
+        # @debug "DataFrame: $df"
 
-        df = select(indf, respcol, "age_weeks")
-        df.func = log.(ab)
-
-        mod = lm(formula, df; dropcollinear=false)
+        mod = glm(formula, df, Binomial(), LogitLink(); dropcollinear=false)
         ct = DataFrame(coeftable(mod))
         ct.feature .= feature
-        rename!(ct, "Pr(>|t|)"=>"pvalue", "Lower 95%"=> "lower_95", "Upper 95%"=> "upper_95", "Coef."=> "coef", "Std. Error"=>"std_err")
+        rename!(ct, "Pr(>|z|)"=>"pvalue", "Lower 95%"=> "lower_95", "Upper 95%"=> "upper_95", "Coef."=> "coef", "Std. Error"=>"std_err")
         select!(ct, Cols(:feature, :Name, :))
         return NamedTuple(only(filter(row-> row.Name == respcol, eachrow(ct))))
     end)
@@ -142,41 +148,97 @@ function runlms(indf, outfile, respcol, featurecols;
     lmresults
 end
 
-
-mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2"]) do eeg_feat 
-    res = runlms(gfs_wide, "$(eeg_feat)_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"))
-    nact = getneuroactive(replace.(res.feature, "UniRef90_"=>""))
-
+function runcors(indf, outfile, respcol, featurecols)
+    corresults = vec(cor(Matrix(indf[!, featurecols]), indf[!, respcol]; dims=1))
+    nact = getneuroactive(replace.(featurecols, "UniRef90_"=>""))
+    
     fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
-        cortest = first(res.Name)
-        ts = res.t
-        
         ixs = nact[gs]
-        isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+        isempty(ixs) && return (; cortest=respcol, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
 
-        cs = ts[ixs]
-        isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+        cs = corresults[ixs]
+        isempty(cs) && return (; cortest=respcol, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
 
-        acs = ts[Not(ixs)]
+        acs = corresults[Not(ixs)]
         mwu = MannWhitneyUTest(cs, acs)
         es = enrichment_score(cs, acs)
 
-        return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        return (; cortest=respcol, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
     end)
-
-    subset!(fseas, :pvalue=> ByRow(!isnan))
+    subset!(fseas, "pvalue"=> ByRow(!isnan))
     fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
     sort!(fseas, :qvalue)
-    CSV.write("$(eeg_feat)_gsea.csv", fseas)
+    CSV.write(outfile, fseas)
     fseas
+end
+
+#-
+
+
+res = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""))
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2"]) do eeg_feat 
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"))
+
+        fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+            cortest = first(res.Name)
+            zs = res.z
+            
+            ixs = nact[gs]
+            isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            cs = zs[ixs]
+            isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            acs = zs[Not(ixs)]
+            mwu = MannWhitneyUTest(cs, acs)
+            es = enrichment_score(cs, acs)
+
+            return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        end)
+
+        subset!(fseas, :pvalue=> ByRow(!isnan))
+        fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+        sort!(fseas, :qvalue)
+        CSV.write("data/outputs/$(eeg_feat)_gsea.csv", fseas)
+        fseas
+    end
+end
+
+res_noage = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""))
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2"]) do eeg_feat
+
+        @debug "EEG feat: $eeg_feat"
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_noage_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"); formula = term(:func) ~ term(eeg_feat))
+
+        fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+            cortest = first(res.Name)
+            zs = res.z
+            
+            ixs = nact[gs]
+            isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            cs = zs[ixs]
+            isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            acs = zs[Not(ixs)]
+            mwu = MannWhitneyUTest(cs, acs)
+            es = enrichment_score(cs, acs)
+
+            return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        end)
+
+        subset!(fseas, :pvalue=> ByRow(!isnan))
+        fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+        sort!(fseas, :qvalue)
+        CSV.write("data/outputs/$(eeg_feat)_noage_gsea.csv", fseas)
+        fseas
+    end
 end
 
 
 #-
 
 using CairoMakie
-
-hist(aoff_cors)
 
 #-
 
@@ -216,11 +278,24 @@ end
 
 #-
 
+amp_N2 = CSV.read("data/outputs/peak_amp_N2_lms.csv", DataFrame)
+lat_N1 = CSV.read("data/outputs/peak_latency_N1_lms.csv", DataFrame)
+
+@assert names(gfs_wide, r"UniRef") == amp_N2.feature
+@assert names(gfs_wide, r"UniRef") == lat_N1.feature
+
+#-
+
 fig = Figure()
 grid1=GridLayout(fig[1,1])
 grid2=GridLayout(fig[2,1])
-plot_fsea!(grid1, aexp_cors[nact["Tryptophan synthesis"]], aexp_cors[Not(nact["Tryptophan synthesis"])]; label="Tryptophan synthesis")
-plot_fsea!(grid2, aexp_cors[nact["p-Cresol synthesis"]], aexp_cors[Not(nact["p-Cresol synthesis"])]; label="p-Cresol synthesis")
+grid3=GridLayout(fig[1,2])
+grid4=GridLayout(fig[2,2])
+
+plot_fsea!(grid1, amp_N2[nact["Tryptophan synthesis"], "z"], amp_N2[Not(nact["Tryptophan synthesis"]), "z"]; label="Tryptophan synthesis - amp N2")
+plot_fsea!(grid2, lat_N1[nact["DOPAC synthesis"], "z"], lat_N1[Not(nact["DOPAC synthesis"]), "z"]; label="DOPAC synthesis - lat N1")
+plot_fsea!(grid3, lat_N1[nact["Isovaleric acid synthesis"], "z"], lat_N1[Not(nact["Isovaleric acid synthesis"]), "z"]; label="Isovaleric acid synthesis - lat N1")
+plot_fsea!(grid4, lat_N1[nact["S-Adenosylmethionine synthesis"], "z"], lat_N1[Not(nact["S-Adenosylmethionine synthesis"]), "z"]; label="SAM synthesis - lat N1")
 
 fig
 
@@ -321,3 +396,20 @@ fig
 
 #-
 
+indf = gfs_wide
+outfile = "data/outputs/$(eeg_feat)_noage_lms.csv"
+respcol = eeg_feat
+featurecols = names(gfs_wide, r"UniRef")
+formula = term(:func) ~ term(respcol)
+
+#-
+
+newidx = let newseqs = Set(readlines("new_samples.txt"))
+    idx = findall(s-> s ∈ newseqs, gfs_wide.seqprep)
+end
+
+describe(gfs_wide[newidx, "age_weeks"])
+describe(gfs_wide[Not(newidx), "age_weeks"])
+
+
+#- 
