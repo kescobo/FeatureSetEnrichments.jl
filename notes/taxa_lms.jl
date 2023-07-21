@@ -229,3 +229,55 @@ DataFrames.transform!(lmresults_log, :pvalue => (col-> MultipleTesting.adjust(co
 sort!(lmresults_log, :qvalue)
 
 lmresults_log
+
+#-
+
+taxa = let 
+    ss = txs_wide.seqprep
+    spcols = names(txs_wide, r"s__")
+    sps = last.(split.(spcols, '|'))
+    setupdf = permutedims(select(txs_wide, "seqprep", names(txs_wide, r"s__")), "seqprep", "species")
+    taxa = CommunityProfile(Matrix(setupdf[!, 2:end]), taxon.(setupdf.species), MicrobiomeSample.(names(setupdf, r"SEQ")))
+    set!(taxa, txs_wide[!, Not(r"k__")]; namecol="seqprep")
+    taxa
+end
+
+has_age = .!ismissing.(get(taxa, :age_weeks))
+
+pco = pcoa(taxa[:, has_age])
+
+using Microbiome.MultivariateStats
+
+# https://github.com/JuliaStats/MultivariateStats.jl/pull/162
+function loadings(M::MultivariateStats.MDS)
+    ev = eigvals(M)
+    return ev' .* projection(M)[:, 1:length(ev)]
+end
+
+# https://github.com/JuliaStats/MultivariateStats.jl/pull/162
+function loadings(M::MultivariateStats.MDS, dim)
+    l = loadings(M)
+    return l[:, dim]
+end
+
+varexplained(M::MultivariateStats.MDS) = eigvals(M) ./ sum(eigvals(M))
+
+mdsaxis(M::MultivariateStats.MDS, dim::Int) = "MDS$dim ($(round(varexplained(M)[dim] * 100, digits=2))%)"
+
+function plot_pcoa!(ax, M::MultivariateStats.MDS; dims=(1,2), kwargs...)
+    ax.xlabel = get(kwargs, :xlabel, mdsaxis(M, dims[1]))
+    ax.ylabel = get(kwargs, :ylabel, mdsaxis(M, dims[2]))
+    
+    scatter!(ax, loadings(M, dims[1]), loadings(M, dims[2]); kwargs...)
+end
+
+#- 
+
+fig = Figure(;resolution = (600, 600))
+
+ax1 = Axis(fig[1,1]; title = "Colored by age")
+# ax2 = Axis(fig[2,1]; title = "Colored by ")
+
+sc = plot_pcoa!(ax1, pco; color= [a for a in get(taxa, :age_weeks)[has_age]])
+Colorbar(fig[1,2], sc; label= "age (weeks)")
+fig
