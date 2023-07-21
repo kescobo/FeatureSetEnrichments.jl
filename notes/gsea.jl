@@ -15,8 +15,6 @@ base = LocalBase()
 
 # `Number_Segs_Post-Seg_Rej` = number of retained trials
 
-#-
-
 
 #-
 
@@ -105,6 +103,11 @@ select!(gfs_wide, "subject", "seqprep","sex","age_weeks", "trials",
                   "peak_amp_N2","peak_latency_N2", 
                   Cols(Not("UNMAPPED"))
 )
+
+#-
+
+subset!(gfs_wide, "subject"=> ByRow(!=("191-34303377"))) # premie
+select!(gfs_wide, Not(r"UniRef90"), sort(names(gfs_wide, r"UniRef")))
 
 #-
 
@@ -278,11 +281,19 @@ end
 
 #-
 
-amp_N2 = CSV.read("data/outputs/peak_amp_N2_lms.csv", DataFrame)
-lat_N1 = CSV.read("data/outputs/peak_latency_N1_lms.csv", DataFrame)
+amp_N2 = sort(CSV.read("data/outputs/peak_amp_N2_lms.csv", DataFrame), "feature")
+lat_N1 = sort(CSV.read("data/outputs/peak_latency_N1_lms.csv", DataFrame), "feature")
+lat_N1_noage = sort(CSV.read("data/outputs/peak_latency_N1_noage_lms.csv", DataFrame), "feature")
+amp_N2_noage = sort(CSV.read("data/outputs/peak_amp_N2_noage_lms.csv", DataFrame), "feature")
+amp_P1_noage = sort(CSV.read("data/outputs/peak_amp_P1_noage_lms.csv", DataFrame), "feature")
+
+#- 
 
 @assert names(gfs_wide, r"UniRef") == amp_N2.feature
 @assert names(gfs_wide, r"UniRef") == lat_N1.feature
+@assert names(gfs_wide, r"UniRef") == lat_N1_noage.feature
+@assert names(gfs_wide, r"UniRef") == amp_N2_noage.feature
+@assert names(gfs_wide, r"UniRef") == amp_P1_noage.feature
 
 #-
 
@@ -295,7 +306,23 @@ grid4=GridLayout(fig[2,2])
 plot_fsea!(grid1, amp_N2[nact["Tryptophan synthesis"], "z"], amp_N2[Not(nact["Tryptophan synthesis"]), "z"]; label="Tryptophan synthesis - amp N2")
 plot_fsea!(grid2, lat_N1[nact["DOPAC synthesis"], "z"], lat_N1[Not(nact["DOPAC synthesis"]), "z"]; label="DOPAC synthesis - lat N1")
 plot_fsea!(grid3, lat_N1[nact["Isovaleric acid synthesis"], "z"], lat_N1[Not(nact["Isovaleric acid synthesis"]), "z"]; label="Isovaleric acid synthesis - lat N1")
-plot_fsea!(grid4, lat_N1[nact["S-Adenosylmethionine synthesis"], "z"], lat_N1[Not(nact["S-Adenosylmethionine synthesis"]), "z"]; label="SAM synthesis - lat N1")
+plot_fsea!(grid4, lat_N1[nact["Menaquinone synthesis"], "z"], lat_N1[Not(nact["Menaquinone synthesis"]), "z"]; label="Menaquinone synthesis - lat N1")
+
+Makie.Label(fig[0,1:2], L"bug \sim eeg + age + trials"; fontsize=30)
+
+fig
+
+#-
+
+fig = Figure(; resolution=(600, 900))
+grid1=GridLayout(fig[1,1])
+grid2=GridLayout(fig[2,1])
+
+
+plot_fsea!(grid1, amp_N2_noage[nact["Tryptophan synthesis"], "z"], amp_N2_noage[Not(nact["Tryptophan synthesis"]), "z"]; label="Tryptophan synthesis - amp N2")
+plot_fsea!(grid2, amp_P1_noage[nact["Glutamate synthesis"], "z"], amp_P1_noage[Not(nact["Glutamate synthesis"]), "z"]; label="Glutamate synthesis - lat N1")
+
+Makie.Label(fig[0,1], L"bug \sim eeg + trials"; fontsize=30, tellwidth=false)
 
 fig
 

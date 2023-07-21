@@ -105,6 +105,9 @@ select!(txs_wide, "subject", "seqprep","sex","age_weeks", "trials",
                   "peak_amp_N2","peak_latency_N2", 
                   Cols(Not("UNKNOWN"))
 )
+#-
+
+subset!(txs_wide, "subject"=> ByRow(!=("191-34303377"))) # premie
 
 #-
 
@@ -174,3 +177,55 @@ ax3 = Axis(fig[3,1]; xlabel="W.lenta (asin sqrt)", ylabel = "P1 amp")
 scatter!(ax3, asin.(sqrt.(txs_wide[!, r"s__Eggerthella_lenta"][!, 1])), txs_wide."peak_amp_P1")
 
 fig
+
+
+#- 
+
+        # ab = collect(indf[!, feature] .+ (minimum(indf[over0, feature])) / 2) # add half-minimum non-zerovalue
+        df = select(indf, respcol, "age_weeks", "trials")
+        over0 = indf[!, feature] .> 0
+        
+        df.func = over0
+        # @debug "DataFrame: $df"
+
+        mod = glm(formula, df, Binomial(), LogitLink(); dropcollinear=false)
+        ct = DataFrame(coeftable(mod))
+
+lmresults_log = let
+    eeg_features = [
+        "peak_amp_N1","peak_latency_N1",
+        "peak_amp_P1","peak_latency_P1",
+        "peak_amp_N2","peak_latency_N2"
+    ]
+
+    bugs = filter(names(txs_wide, r"s__")) do bug
+        prevalence(txs_wide[!, bug]) > 0.1
+    end
+
+
+    res = mapreduce(vcat, eeg_features) do feature
+        @info feature
+        DataFrame(ThreadsX.map(bugs) do bug
+            # @debug "Feature: $feature"
+
+            df = select(txs_wide, feature, "age_weeks", "trials")
+            over0 = txs_wide[!, bug] .> 0      
+            df.bug = over0
+            # @debug "DataFrame: $df"
+
+            mod = glm(term(:bug) ~ term(feature) + term(:age_weeks) + term(:trials), df, Binomial(), LogitLink(); dropcollinear=false)
+            ct = DataFrame(coeftable(mod))
+            ct.bug .= last(split(bug, "|"))
+            rename!(ct, "Name"=> "feature", "Pr(>|z|)"=>"pvalue", "Lower 95%"=> "lower_95", "Upper 95%"=> "upper_95", "Coef."=> "coef", "Std. Error"=>"std_err")
+            select!(ct, Cols(:feature, :bug, :))
+            return NamedTuple(only(filter(row-> row.feature == feature, eachrow(ct))))
+        end)
+    end
+end
+
+subset!(lmresults_log, "pvalue"=> ByRow(!isnan))
+DataFrames.transform!(groupby(lmresults_log, "feature"), :pvalue => (col-> MultipleTesting.adjust(collect(col), BenjaminiHochberg())) => :qvalue)
+DataFrames.transform!(lmresults_log, :pvalue => (col-> MultipleTesting.adjust(collect(col), BenjaminiHochberg())) => "qvalue₀")
+sort!(lmresults_log, :qvalue)
+
+lmresults_log
