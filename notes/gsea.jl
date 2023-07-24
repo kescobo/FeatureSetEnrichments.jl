@@ -10,11 +10,24 @@ metadata = CSV.read("data/Khula_MicrobiomeMetaData_SA_25052023.csv", DataFrame; 
 subset!(metadata, "zymo_code_3m"=> ByRow(!ismissing))
 metadata.zymo_code_3m = replace.(metadata.zymo_code_3m, r"z3m[o0]"i => "Z3MO")
 select!(metadata, "subject_id", "zymo_code_3m"=> "zymo", "age_zymo_3m_wks"=> "age")
+age_model = CSV.read("data/khula_age_residuals.csv", DataFrame)
 # If new environment, requires running `VKCComputing.set_readonly_pat!()` and `VKCComputing.set_airtable_dir!()`
 base = LocalBase()
 
 # `Number_Segs_Post-Seg_Rej` = number of retained trials
 
+## corrections
+
+# N1 latency and amplitude stays the same
+# then corrected P1 latency is calculated as: P1 latency - N1 latency
+# and corrected N2 latency is : N2 latency - P1 latency
+# corrected P1 amplitude is: P1 amplitude - N1 amplitude
+# and corrected N2 amplitude is: N2 amplitude - P1 amplitude
+
+eegvep.peak_latency_P1_corrected = eegvep.peak_latency_P1 .- eegvep.peak_latency_N1
+eegvep.peak_latency_N2_corrected = eegvep.peak_latency_N2 .- eegvep.peak_latency_P1
+eegvep.peak_amp_P1_corrected = eegvep.peak_amp_P1 .- eegvep.peak_amp_N1
+eegvep.peak_amp_N2_corrected = eegvep.peak_amp_N2 .- eegvep.peak_amp_P1
 
 #-
 
@@ -92,7 +105,11 @@ leftjoin!(gfs_wide,
                          "peak_amp_P1",
                          "peak_latency_P1",
                          "peak_amp_N2",
-                         "peak_latency_N2"
+                         "peak_latency_N2",
+                         "peak_latency_P1_corrected",
+                         "peak_latency_N2_corrected",
+                         "peak_amp_P1_corrected",
+                         "peak_amp_N2_corrected",
                 );
     on="subject"
 )
@@ -100,14 +117,21 @@ leftjoin!(gfs_wide,
 select!(gfs_wide, "subject", "seqprep","sex","age_weeks", "trials",
                   "peak_amp_N1","peak_latency_N1",
                   "peak_amp_P1","peak_latency_P1",
-                  "peak_amp_N2","peak_latency_N2", 
+                  "peak_amp_N2","peak_latency_N2",
+                  "peak_latency_P1_corrected",
+                  "peak_latency_N2_corrected",
+                  "peak_amp_P1_corrected",
+                  "peak_amp_N2_corrected",
                   Cols(Not("UNMAPPED"))
 )
 
 #-
 
 subset!(gfs_wide, "subject"=> ByRow(!=("191-34303377"))) # premie
+leftjoin!(gfs_wide, select(age_model, "sample"=> "seqprep", "test_prediction"=> "predicted_age"); on="seqprep")
+
 select!(gfs_wide, Not(r"UniRef90"), sort(names(gfs_wide, r"UniRef")))
+
 
 #-
 
@@ -122,25 +146,31 @@ using HypothesisTests
 #-
 
 function runlms(indf, outfile, respcol, featurecols;
-                formula = term(:func) ~ term(respcol) + term(:age_weeks) + term(:trials),
+                age_col = "age_weeks",
+                formula = term(:func) ~ term(respcol) + term(age_col) + term(:trials),
         )
         @debug "Respcol: $respcol"
     lmresults = DataFrame(ThreadsX.map(featurecols) do feature
         # @debug "Feature: $feature"
 
         # ab = collect(indf[!, feature] .+ (minimum(indf[over0, feature])) / 2) # add half-minimum non-zerovalue
-        df = select(indf, respcol, "age_weeks", "trials")
+        df = select(indf, respcol, age_col, "trials")
         over0 = indf[!, feature] .> 0
         
         df.func = over0
         # @debug "DataFrame: $df"
 
-        mod = glm(formula, df, Binomial(), LogitLink(); dropcollinear=false)
-        ct = DataFrame(coeftable(mod))
-        ct.feature .= feature
-        rename!(ct, "Pr(>|z|)"=>"pvalue", "Lower 95%"=> "lower_95", "Upper 95%"=> "upper_95", "Coef."=> "coef", "Std. Error"=>"std_err")
-        select!(ct, Cols(:feature, :Name, :))
-        return NamedTuple(only(filter(row-> row.Name == respcol, eachrow(ct))))
+        try
+            mod = glm(formula, df, Binomial(), LogitLink(); dropcollinear=false)
+            ct = DataFrame(coeftable(mod))
+            ct.feature .= feature
+            rename!(ct, "Pr(>|z|)"=>"pvalue", "Lower 95%"=> "lower_95", "Upper 95%"=> "upper_95", "Coef."=> "coef", "Std. Error"=>"std_err")
+            select!(ct, Cols(:feature, :Name, :))
+            return NamedTuple(only(filter(row-> row.Name == respcol, eachrow(ct))))    
+        catch e
+            @warn "hit $e for $feature"
+            return (; feature, Name = respcol, coef = NaN, std_err = NaN, z = NaN, pvalue = NaN, lower_95 = NaN, upper_95 = NaN, qvalue = NaN)
+        end
     end)
 
     subset!(lmresults, "pvalue"=> ByRow(!isnan))
@@ -179,7 +209,10 @@ end
 
 
 res = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""))
-    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2"]) do eeg_feat 
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2",
+                     "peak_latency_P1_corrected", "peak_latency_N2_corrected", "peak_amp_P1_corrected", "peak_amp_N2_corrected"]) do eeg_feat 
+        
+        @info "EEG feat: $eeg_feat"
         res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"))
 
         fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
@@ -208,10 +241,11 @@ res = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"
 end
 
 res_noage = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""))
-    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2"]) do eeg_feat
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2",
+                     "peak_latency_P1_corrected", "peak_latency_N2_corrected", "peak_amp_P1_corrected", "peak_amp_N2_corrected"]) do eeg_feat 
 
-        @debug "EEG feat: $eeg_feat"
-        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_noage_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"); formula = term(:func) ~ term(eeg_feat))
+        @info "EEG feat: $eeg_feat"
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_noage_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"); formula = term(:func) ~ term(eeg_feat) + term(:trials))
 
         fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
             cortest = first(res.Name)
@@ -238,6 +272,54 @@ res_noage = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniR
     end
 end
 
+res_predage = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""))
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2",
+                     "peak_latency_P1_corrected", "peak_latency_N2_corrected", "peak_amp_P1_corrected", "peak_amp_N2_corrected"]) do eeg_feat 
+
+        @info "EEG feat: $eeg_feat"
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_pred_lms.csv", eeg_feat, names(gfs_wide, r"UniRef"); 
+                    age_col = "predicted_age",
+                    formula = term(:func) ~ term(eeg_feat) + term(:predicted_age) + term(:trials))
+        fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+            cortest = first(res.Name)
+            zs = res.z
+            
+            ixs = nact[gs]
+            isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            cs = zs[ixs]
+            isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            acs = zs[Not(ixs)]
+            mwu = MannWhitneyUTest(cs, acs)
+            es = enrichment_score(cs, acs)
+
+            return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        end)
+
+        subset!(fseas, :pvalue=> ByRow(!isnan))
+        fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+        sort!(fseas, :qvalue)
+        CSV.write("data/outputs/$(eeg_feat)_pred_gsea.csv", fseas)
+        fseas
+    end
+end
+
+#-
+
+res.model .= "base"
+res_noage.model .= "no age"
+res_predage.model .= "pred. age"
+
+res_comb = let keep = filter(gs-> length(nact[gs]) > 5, unique(res.geneset))
+    comb = vcat(res, res_noage, res_predage)
+    subset!(comb, "geneset"=> ByRow(g-> g ∈ keep))
+
+    transform!(groupby(comb, ["model", "cortest"]), "pvalue"=> (p-> adjust(collect(p), BenjaminiHochberg())) => "qvalue")
+
+    subset!(comb, "qvalue"=> ByRow(<(0.2)))
+    sort!(comb, ["model", "qvalue"])
+end
 
 #-
 
@@ -310,6 +392,7 @@ plot_fsea!(grid4, lat_N1[nact["Menaquinone synthesis"], "z"], lat_N1[Not(nact["M
 
 Makie.Label(fig[0,1:2], L"bug \sim eeg + age + trials"; fontsize=30)
 
+save("data/figures/sig_fsea.svg", fig)
 fig
 
 #-
@@ -324,6 +407,7 @@ plot_fsea!(grid2, amp_P1_noage[nact["Glutamate synthesis"], "z"], amp_P1_noage[N
 
 Makie.Label(fig[0,1], L"bug \sim eeg + trials"; fontsize=30, tellwidth=false)
 
+save("data/figures/sig_fsea_no_age.svg", fig)
 fig
 
 #-
@@ -437,6 +521,3 @@ end
 
 describe(gfs_wide[newidx, "age_weeks"])
 describe(gfs_wide[Not(newidx), "age_weeks"])
-
-
-#- 
