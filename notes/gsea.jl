@@ -323,6 +323,123 @@ end
 
 #-
 
+res_full = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""); consolidate = false)
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2",
+                     "peak_latency_P1_corrected", "peak_latency_N2_corrected", "peak_amp_P1_corrected", "peak_amp_N2_corrected"]) do eeg_feat 
+        
+        @info "EEG feat: $eeg_feat"
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_lms_full.csv", eeg_feat, names(gfs_wide, r"UniRef"))
+
+        fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+            cortest = first(res.Name)
+            zs = res.z
+            
+            ixs = nact[gs]
+            isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            cs = zs[ixs]
+            isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            acs = zs[Not(ixs)]
+            mwu = MannWhitneyUTest(cs, acs)
+            es = enrichment_score(cs, acs)
+
+            return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        end)
+
+        subset!(fseas, :pvalue=> ByRow(!isnan))
+        fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+        sort!(fseas, :qvalue)
+        CSV.write("data/outputs/$(eeg_feat)_gsea_full.csv", fseas)
+        fseas
+    end
+end
+
+res_noage_full = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""); consolidate = false)
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2",
+                     "peak_latency_P1_corrected", "peak_latency_N2_corrected", "peak_amp_P1_corrected", "peak_amp_N2_corrected"]) do eeg_feat 
+
+        @info "EEG feat: $eeg_feat"
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_noage_lms_full.csv", eeg_feat, names(gfs_wide, r"UniRef"); formula = term(:func) ~ term(eeg_feat) + term(:trials))
+
+        fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+            cortest = first(res.Name)
+            zs = res.z
+            
+            ixs = nact[gs]
+            isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            cs = zs[ixs]
+            isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            acs = zs[Not(ixs)]
+            mwu = MannWhitneyUTest(cs, acs)
+            es = enrichment_score(cs, acs)
+
+            return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        end)
+
+        subset!(fseas, :pvalue=> ByRow(!isnan))
+        fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+        sort!(fseas, :qvalue)
+        CSV.write("data/outputs/$(eeg_feat)_noage_gsea_full.csv", fseas)
+        fseas
+    end
+end
+
+res_predage_full = let nact = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""); consolidate = false)
+    mapreduce(vcat, ["peak_amp_N1","peak_latency_N1","peak_amp_P1","peak_latency_P1","peak_amp_N2","peak_latency_N2",
+                     "peak_latency_P1_corrected", "peak_latency_N2_corrected", "peak_amp_P1_corrected", "peak_amp_N2_corrected"]) do eeg_feat 
+
+        @info "EEG feat: $eeg_feat"
+        res = runlms(gfs_wide, "data/outputs/$(eeg_feat)_pred_lms_full.csv", eeg_feat, names(gfs_wide, r"UniRef"); 
+                    age_col = "predicted_age",
+                    formula = term(:func) ~ term(eeg_feat) + term(:predicted_age) + term(:trials))
+        fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
+            cortest = first(res.Name)
+            zs = res.z
+            
+            ixs = nact[gs]
+            isempty(ixs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            cs = zs[ixs]
+            isempty(cs) && return (; cortest, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+
+            acs = zs[Not(ixs)]
+            mwu = MannWhitneyUTest(cs, acs)
+            es = enrichment_score(cs, acs)
+
+            return (; cortest, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
+        end)
+
+        subset!(fseas, :pvalue=> ByRow(!isnan))
+        fseas.qvalue = adjust(fseas.pvalue, BenjaminiHochberg())
+        sort!(fseas, :qvalue)
+        CSV.write("data/outputs/$(eeg_feat)_pred_gsea_full.csv", fseas)
+        fseas
+    end
+end
+
+#-
+
+res_full.model .= "base"
+res_noage_full.model .= "no age"
+res_predage_full.model .= "pred. age"
+
+nact_full = getneuroactive(replace.(names(gfs_wide, r"UniRef"), "UniRef90_"=>""); consolidate = false)
+
+res_comb_full = let keep = filter(gs-> length(nact_full[gs]) > 5, unique(res_full.geneset))
+    comb = vcat(res_full, res_noage_full, res_predage_full)
+    subset!(comb, "geneset"=> ByRow(g-> g ∈ keep))
+
+    transform!(groupby(comb, ["model", "cortest"]), "pvalue"=> (p-> adjust(collect(p), BenjaminiHochberg())) => "qvalue")
+
+    subset!(comb, "qvalue"=> ByRow(<(0.2)))
+    sort!(comb, ["model", "qvalue"])
+end
+
+#-
+
 using CairoMakie
 
 #-
@@ -369,6 +486,11 @@ lat_N1_noage = sort(CSV.read("data/outputs/peak_latency_N1_noage_lms.csv", DataF
 amp_N2_noage = sort(CSV.read("data/outputs/peak_amp_N2_noage_lms.csv", DataFrame), "feature")
 amp_P1_noage = sort(CSV.read("data/outputs/peak_amp_P1_noage_lms.csv", DataFrame), "feature")
 
+# amp_N2_pred = sort(CSV.read("data/outputs/peak_amp_N2_pred_lms.csv", DataFrame), "feature")
+amp_P1_pred = sort(CSV.read("data/outputs/peak_amp_P1_pred_lms.csv", DataFrame), "feature")
+amp_P1cor_pred = sort(CSV.read("data/outputs/peak_amp_P1_corrected_pred_lms.csv", DataFrame), "feature")
+lat_N2cor_pred = sort(CSV.read("data/outputs/peak_latency_N2_corrected_pred_lms.csv", DataFrame), "feature")
+
 #- 
 
 @assert names(gfs_wide, r"UniRef") == amp_N2.feature
@@ -376,6 +498,11 @@ amp_P1_noage = sort(CSV.read("data/outputs/peak_amp_P1_noage_lms.csv", DataFrame
 @assert names(gfs_wide, r"UniRef") == lat_N1_noage.feature
 @assert names(gfs_wide, r"UniRef") == amp_N2_noage.feature
 @assert names(gfs_wide, r"UniRef") == amp_P1_noage.feature
+
+# @assert names(gfs_wide, r"UniRef") == amp_N2_pred.feature
+@assert names(gfs_wide, r"UniRef") == amp_P1_pred.feature
+@assert names(gfs_wide, r"UniRef") == amp_P1cor_pred.feature
+@assert names(gfs_wide, r"UniRef") == lat_N2cor_pred.feature
 
 #-
 
@@ -395,6 +522,9 @@ Makie.Label(fig[0,1:2], L"bug \sim eeg + age + trials"; fontsize=30)
 save("data/figures/sig_fsea.svg", fig)
 fig
 
+
+#-
+
 #-
 
 fig = Figure(; resolution=(600, 900))
@@ -410,114 +540,131 @@ Makie.Label(fig[0,1], L"bug \sim eeg + trials"; fontsize=30, tellwidth=false)
 save("data/figures/sig_fsea_no_age.svg", fig)
 fig
 
-#-
 
-aoff_cors = ThreadsX.map(enumerate(gfs.feature)) do (i, feature)
-    abunds = collect(gfs[i, 2:end])
-    cor(eegbase.visual_Average_aper_offset, abunds)
-end
-
-offset_fseas = DataFrame(ThreadsX.map(collect(keys(nact))) do gs
-    ixs = nact[gs]
-    isempty(ixs) && return (; cortest = "visual_Average_aper_offset", geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
-
-    cs = aoff_cors[ixs]
-    isempty(cs) && return (; cortest = "visual_Average_aper_offset", geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
-
-    acs = aoff_cors[Not(ixs)]
-    mwu = MannWhitneyUTest(cs, acs)
-    es = enrichment_score(cs, acs)
-
-    return (; cortest = "visual_Average_aper_offset", geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
-end)
-
-subset!(offset_fseas, :pvalue=> ByRow(!isnan))
-offset_fseas.qvalue = adjust(offset_fseas.pvalue, BenjaminiHochberg())
-sort!(offset_fseas, :qvalue)
 
 #- 
 
-fig = Figure()
-grid1=GridLayout(fig[1,1])
+genesets = unique(res_comb.geneset)
 
-plot_fsea!(grid1, aoff_cors[nact["p-Cresol synthesis"]], aoff_cors[Not(nact["p-Cresol synthesis"])]; label="p-Cresol synthesis")
+gs_gfs = mapreduce(vcat, genesets) do geneset
+    urefs = Set(names(gfs_wide, r"UniRef")[nact[geneset]])
 
-fig
-
-#-
-
-#-
-
-gfs_vep = outerjoin(map(eegvep.file) do f
-    df = CSV.read(f, DataFrame; skipto = 2, header=["feature", replace(basename(f), r"_S\d+_genefamilies\.tsv"=> "")])
-    subset!(df, "feature"=> ByRow(f-> !contains(f, '|')))
-end...; on="feature")
-
-foreach(n-> gfs_vep[!,n] = coalesce.(gfs_vep[!,n], 0.), names(gfs_vep))
-
-#-
-
-fig = Figure(;resolution = (600, 1800))
-
-vep_fseas = DataFrame()
-nact = getneuroactive(replace.(gfs_vep.feature, "UniRef90_"=>""))
-
-i = 0
-
-for eegfeat in ("peak_amp_N1", "peak_latency_N1", "peak_amp_P1", "peak_latency_P1", "peak_amp_N2", "peak_latency_N2")
-    @info eegfeat
-    vep_cors = ThreadsX.map(enumerate(gfs_vep.feature)) do (i, feature)
-        abunds = collect(gfs_vep[i, 2:end])
-        cor(eegvep[!, eegfeat], abunds)
+    gs_gfs = mapreduce(vcat, subset(eegvep, "file"=> ByRow(!ismissing)).path) do f
+        seqprep = replace(basename(f), r"_S\d+_genefamilies\.tsv"=> "")
+        df = CSV.read(f, DataFrame; skipto = 2, header=["feature", "abundance"])
+        df.seqprep .= seqprep
+        df.subject .= prep2sub[seqprep]
+        df.geneset .= geneset
+        subset!(df, "feature"=> ByRow(f-> first(split(f, '|')) ∈ urefs))
     end
 
-    df = DataFrame(map(collect(keys(nact))) do gs
-        ixs = nact[gs]
-        isempty(ixs) && return (; cortest = eegfeat, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
+    transform!(gs_gfs, "feature" => ByRow(f-> begin
+        spl = String.(split(f, '|'))
+        uniref = first(spl)
+        length(spl) == 1 && return (; uniref, genus = missing, species = missing)
+        spl[2] == "unclassified" && return (; uniref, genus = "unclassified", species = "unclassified")
+        (genus, species) = String.(split(spl[2], '.'))
+        return (; uniref, genus, species)
+    end) => ["uniref", "genus", "species"])
 
-        cs = vep_cors[ixs]
-        isempty(cs) && return (; cortest = eegfeat, geneset = gs, U = NaN, median = NaN, enrichment = NaN, mu = NaN, sigma = NaN, pvalue = NaN)
-
-        acs = vep_cors[Not(ixs)]
-        mwu = MannWhitneyUTest(cs, acs)
-        es = enrichment_score(cs, acs)
-
-        if any([(eegfeat == "peak_amp_N1"      && gs == "Menaquinone synthesis"),
-                 (eegfeat == "peak_latency_P1"  && gs == "GABA synthesis"),
-                 (eegfeat == "peak_latency_P1"  && gs == "Glutamate degradation"),
-                 (eegfeat == "peak_amp_N2"      && gs == "Quinolinic acid degradation"),
-                 (eegfeat == "peak_amp_N2"      && gs == "Butyrate synthesis")])
-            global i += 1
-            
-            grid=GridLayout(fig[i,1])
-            plot_fsea!(grid, vep_cors[nact[gs]], aoff_cors[Not(nact[gs])]; label=gs, ylabel="$eegfeat enrichment")
-        end
-
-
-        return (; cortest = eegfeat, geneset = gs, U = mwu.U, median = mwu.median, enrichment = es, mu = mwu.mu, sigma = mwu.sigma, pvalue=pvalue(mwu))
-    end)
-    append!(vep_fseas, df)
+    subset!(gs_gfs, "species"=> ByRow(!ismissing))
 end
 
-subset!(vep_fseas, :pvalue=> ByRow(!isnan))
-transform!(groupby(vep_fseas, :cortest), "pvalue" => (p-> adjust(collect(p), BenjaminiHochberg())) => "qvalue")
-sort!(vep_fseas, :qvalue)
+
+gf_speccontrib = DataFrames.combine(groupby(gs_gfs, ["geneset", "genus"]), "abundance"=> sum => "abundance_total")
+transform!(groupby(gf_contrib, ["geneset"]), "abundance_total"=> (a-> a ./ sum(a)) => "abundance_perc")
+
+#-
+
+top12 = subset(gf_contrib, "abundance_perc" => ByRow(>(0.05))).genus |> unique
+
+top12df = DataFrames.combine(groupby(gf_contrib, "geneset"), AsTable(["genus", "abundance_perc"]) => (nt -> begin
+    keep = findall(g-> g ∈ top12, nt.genus)
+    other = sum(nt.abundance_perc[Not(keep)])
+    
+    return (; genus = [nt.genus[keep]; "other"], abundance_perc = [nt.abundance_perc[keep]; other])
+end) => ["genus", "abundance_perc"])
+
+
+#-
+using ColorSchemes
+using ColorSchemes.ColorTypes
+
+let genera = filter(!=("other"), unique(top12df.genus))
+    genus_groups = Dict(g=>  i for (i, g) in enumerate(genera))
+    genus_groups["other"] = 13
+    transform!(top12df, "genus"=> ByRow(g-> genus_groups[g])=> "genus_group")
+    transform!(top12df, "genus_group"=> ByRow(gg-> gg == 13 ? RGB(0.85,0.85,0.85) : ColorSchemes.Paired_12[gg])=> "color")
+end
+
+let genesets = unique(top12df.geneset)
+    gs_groups = Dict(g=> i for (i, g) in enumerate(genesets))
+    transform!(top12df, "geneset"=> ByRow(g-> gs_groups[g])=> "geneset_group")
+end
+
+#- 
+
+fig, ax, bp = barplot(top12df.geneset_group, top12df.abundance_perc;
+    stack = top12df.genus_group,
+    color = top12df.color,
+    colormap = :Paired_12,
+    axis = (; xticks = (1:maximum(top12df.geneset_group), unique(top12df.geneset)), 
+              xticklabelrotation = π / 4,
+              title = "Genus contribution to genesets")
+)
+
+Legend(fig[1,2],
+    [MarkerElement(; color = col, marker = :rect) for col in unique(top12df.color)],
+    unique(top12df.genus))
 
 fig
+#- 
 
 #-
 
-indf = gfs_wide
-outfile = "data/outputs/$(eeg_feat)_noage_lms.csv"
-respcol = eeg_feat
-featurecols = names(gfs_wide, r"UniRef")
-formula = term(:func) ~ term(respcol)
+gf_speccontrib = DataFrames.combine(groupby(gs_gfs, ["geneset", "species"]), "abundance"=> sum => "abundance_total")
+transform!(groupby(gf_speccontrib, ["geneset"]), "abundance_total"=> (a-> a ./ sum(a)) => "abundance_perc")
+
+topspec = subset(gf_speccontrib, "abundance_perc" => ByRow(>(0.05))).species |> unique
+
+topspecdf = DataFrames.combine(groupby(gf_speccontrib, "geneset"), AsTable(["species", "abundance_perc"]) => (nt -> begin
+    keep = findall(g-> g ∈ topspec, nt.species)
+    other = sum(nt.abundance_perc[Not(keep)])
+    
+    return (; species = [nt.species[keep]; "other"], abundance_perc = [nt.abundance_perc[keep]; other])
+end) => ["species", "abundance_perc"])
+
 
 #-
+using ColorSchemes
+using ColorSchemes.ColorTypes
 
-newidx = let newseqs = Set(readlines("new_samples.txt"))
-    idx = findall(s-> s ∈ newseqs, gfs_wide.seqprep)
+let genera = filter(!=("other"), unique(topspecdf.species))
+    species_groups = Dict(g=>  i for (i, g) in enumerate(genera))
+    species_groups["other"] = 13
+    transform!(topspecdf, "species"=> ByRow(g-> species_groups[g])=> "species_group")
+    transform!(topspecdf, "species_group"=> ByRow(gg-> gg == 13 ? RGB(0.85,0.85,0.85) : ColorSchemes.Paired_12[gg])=> "color")
 end
 
-describe(gfs_wide[newidx, "age_weeks"])
-describe(gfs_wide[Not(newidx), "age_weeks"])
+let genesets = unique(topspecdf.geneset)
+    gs_groups = Dict(g=> i for (i, g) in enumerate(genesets))
+    transform!(topspecdf, "geneset"=> ByRow(g-> gs_groups[g])=> "geneset_group")
+end
+
+#- 
+
+fig, ax, bp = barplot(topspecdf.geneset_group, topspecdf.abundance_perc;
+    stack = topspecdf.species_group,
+    color = topspecdf.color,
+    colormap = :Paired_12,
+    axis = (; xticks = (1:maximum(topspecdf.geneset_group), unique(topspecdf.geneset)), 
+              xticklabelrotation = π / 4,
+              title = "species contribution to genesets")
+)
+
+Legend(fig[1,2],
+    [MarkerElement(; color = col, marker = :rect) for col in unique(topspecdf.color)],
+    unique(topspecdf.species))
+
+fig
+#- 
