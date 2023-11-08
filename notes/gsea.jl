@@ -506,7 +506,7 @@ lat_N2cor_pred = sort(CSV.read("data/outputs/peak_latency_N2_corrected_pred_lms.
 
 #-
 
-fig = Figure()
+fig = Figure();
 grid1=GridLayout(fig[1,1])
 grid2=GridLayout(fig[2,1])
 grid3=GridLayout(fig[1,2])
