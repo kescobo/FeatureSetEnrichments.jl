@@ -2,8 +2,7 @@ module FeatureSetEnrichments
 
 export fsea,
        pvalue,
-       enrichment_scores,
-       enrichment_score
+       enrichment_scores
 
 using HypothesisTests: MannWhitneyUTest
 import HypothesisTests: pvalue
@@ -120,20 +119,13 @@ function enrichment_scores(ranks, nfeatures)
     notscore = 1 / (nfeatures - nr)
 
     ranks = sort(ranks)
-    return ThreadsX.map(i-> _es_at_pos(ranks[i], i, setscore, notscore), eachindex(ranks))
+    scores = ThreadsX.map(i-> _es_at_pos(ranks[i], i, setscore, notscore), eachindex(ranks))
+    candidates = [scores; scores .- setscore]
+    (_, i) = findmax(abs, candidates)
+    return (candidates[i], scores)
 end
 
 enrichment_scores(fr::FSEAResult) = enrichment_scores(fr.setranks, fr.nfeatures)
-
-
-function enrichment_score(scores)
-    (_, i) = findmax(abs, scores)
-    return scores[i]
-end
-
-enrichment_score(ranks, nfeatures) = enrichment_score(enrichment_scores(ranks, nfeatures))
-
-enrichment_score(fr::FSEAResult) = enrichment_score(enrichment_scores(fr))
 
 
 end # module FeatureSetEnrichments
