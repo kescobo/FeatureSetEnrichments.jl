@@ -1,8 +1,14 @@
 module FeatureSetEnrichments
 
+export fsea,
+       pvalue,
+       enrichment_scores,
+       enrichment_score
+
 using HypothesisTests: MannWhitneyUTest
+import HypothesisTests: pvalue
 using InvertedIndices: Not
-using ThreadsX: count
+using ThreadsX
 
 abstract type FSEATest end
 
@@ -42,10 +48,36 @@ struct MWU <: FSEATest end
 
 
 struct FSEAResult
-    es::Float64
     pvalue::Float64
     nfeatures::Int
     setranks::Vector{Int}
+end
+
+function Base.show(io::IO, ::MIME"text/plain", fr::FSEAResult)
+    println(io, """
+    FSEA Result of dataset with
+      n features: $(fr.nfeatures)
+      n in-set: $(length(fr.setranks))
+      p-value: $(fr.pvalue)"""
+    )
+end
+
+function _run_fsea(::MWU, fset_ranks, nfeatures)
+    mwu = MannWhitneyUTest(fset_ranks, 1:nfeatures)
+    return FSEAResult(pvalue(mwu), nfeatures, fset_ranks)
+end
+
+function _run_fsea(perm::Permutation, fset_ranks, nfeatures)
+    es = enrichment_score(fset_ranks, nfeatures)
+    ng = length(fset_ranks)
+    nperm = perm.nperm
+
+    lt = ThreadsX.count(1:nperm) do _
+        rranks = rand(1:nfeatures, ng)
+        ses = enrichment_score(rranks, nfeatures)
+        es < 0 ? ses < es : ses > es
+    end
+    return (lt / nperm, es)
 end
 
 """
@@ -64,13 +96,15 @@ There are currently two types of tests that can be performed:
 
 """
 function fsea(model::FSEATest, vals, fset_index)
-    srtd = zeros(Int, length(vals))
-    sortperm!(srtd, vals; rev=true)
-    invper
+    ranks = invperm(sortperm(vals))
+    fset_ranks = ranks[fset_index]
+    nfeatures = length(vals)
+
+    _run_fsea(model, fset_ranks, nfeatures)
 end
 
 
-fsea(cors, pos) = (cors, pos, MannWhitneyUTest(cors[pos], cors[Not(pos)]))
+fsea(vals, fset_index) = fsea(MWU(), vals, fset_index)
 
 function fsea(cors, allfeatures::AbstractVector, searchset::Set)
     pos = ThreadsX.findall(x-> x in searchset, allfeatures)
@@ -78,30 +112,28 @@ function fsea(cors, allfeatures::AbstractVector, searchset::Set)
     return fsea(cors, pos)
 end
 
+_es_at_pos(rank, idx, setscore, notscore) = idx * setscore + (rank - idx) * notscore 
 
-function enrichment_score(cors, pos)
-    srt = sortperm(cors; rev=true)
-    ranks = invperm(srt)
-    setranks = ranks[pos]    
-    ng = length(pos)
+function enrichment_scores(ranks, nfeatures)
+    nr = length(ranks)
+    setscore =  -1 / nr
+    notscore = 1 / (nfeatures - nr)
 
-    setscore =  1 / ng
-    notscore = -1 / (length(cors) - ng)
-
-    ys = cumsum(i ∈ setranks ? setscore : notscore for i in eachindex(ranks))
-    lower, upper = extrema(ys)
-    return abs(lower) > abs(upper) ? lower : upper
+    ranks = sort(ranks)
+    return ThreadsX.map(i-> _es_at_pos(ranks[i], i, setscore, notscore), eachindex(ranks))
 end
 
-function fsea_permute(cors, pos; nperm=1000)
-    es = enrichment_score(cors, pos)
-    ng = length(pos)
-    lt = ThreadsX.count(1:nperm) do _
-        spos = rand(eachindex(cors), ng)
-        ses = enrichment_score(cors, spos)
-        es < 0 ? ses < es : ses > es
-    end
-    return (lt / nperm, es)
+enrichment_scores(fr::FSEAResult) = enrichment_scores(fr.setranks, fr.nfeatures)
+
+
+function enrichment_score(scores)
+    (_, i) = findmax(abs, scores)
+    return scores[i]
 end
 
-end
+enrichment_score(ranks, nfeatures) = enrichment_score(enrichment_scores(ranks, nfeatures))
+
+enrichment_score(fr::FSEAResult) = enrichment_score(enrichment_scores(fr))
+
+
+end # module FeatureSetEnrichments

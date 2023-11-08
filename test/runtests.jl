@@ -2,5 +2,7 @@ using FeatureSetEnrichments
 using Test
 
 @testset "FeatureSetEnrichments.jl" begin
-    # Write your tests here.
+    @test enrichment_score(1:10, 1000) == -1
+    @test enrichment_score(991:1000, 1000) == 1
+
 end
