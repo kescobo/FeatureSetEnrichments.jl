@@ -2,7 +2,7 @@ module FeatureSetEnrichments
 
 export fsea,
        pvalue,
-       enrichment_scores
+       enrichment_score
 
 using HypothesisTests: MannWhitneyUTest
 import HypothesisTests: pvalue
@@ -105,15 +105,10 @@ end
 
 fsea(vals, fset_index) = fsea(MWU(), vals, fset_index)
 
-function fsea(cors, allfeatures::AbstractVector, searchset::Set)
-    pos = ThreadsX.findall(x-> x in searchset, allfeatures)
-
-    return fsea(cors, pos)
-end
-
 _es_at_pos(rank, idx, setscore, notscore) = idx * setscore + (rank - idx) * notscore 
 
-function enrichment_scores(ranks, nfeatures)
+
+function enrichment_score(ranks, nfeatures)
     nr = length(ranks)
     setscore =  -1 / nr
     notscore = 1 / (nfeatures - nr)
@@ -122,10 +117,18 @@ function enrichment_scores(ranks, nfeatures)
     scores = ThreadsX.map(i-> _es_at_pos(ranks[i], i, setscore, notscore), eachindex(ranks))
     candidates = [scores; scores .- setscore]
     (_, i) = findmax(abs, candidates)
-    return (candidates[i], scores)
+    return candidates[i]
 end
 
-enrichment_scores(fr::FSEAResult) = enrichment_scores(fr.setranks, fr.nfeatures)
+"""
+    enrichment_score(result::FSEAResult)
+
+Calculates the enrichment score (E.S.) for a feature set
+in an [`FSEAResult`](@ref).
+See [Mootha et. al. (2013)](https://doi.org/10.1038/ng1180)
+for details about how this is calculated.
+"""
+enrichment_score(result::FSEAResult) = enrichment_score(result.setranks, result.nfeatures)
 
 
 end # module FeatureSetEnrichments

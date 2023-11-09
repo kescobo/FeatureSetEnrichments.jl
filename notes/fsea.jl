@@ -58,36 +58,5 @@ function getneuroactive(features; neuroactivepath=joinpath("/brewster", "kevin",
     return neuroactive_index
 end
 
-fsea(cors, pos) = (cors, pos, MannWhitneyUTest(cors[pos], cors[Not(pos)]))
-
-function fsea(cors, allfeatures::AbstractVector, searchset::Set)
-    pos = findall(x-> x in searchset, allfeatures)
-
-    return fsea(cors, pos)
-end
-
-function fsea(occ::AbstractMatrix, metadatum::AbstractVector, pos::AbstractVector{<:Int})
-    cors = let notmissing = map(!ismissing, metadatum)
-        occ = occ[:, notmissing]
-        metadatum = metadatum[notmissing]
-        cor(metadatum, occ, dims=2)'
-    end
-
-    return fsea(cors, pos)
-end
-
-function enrichment_score(setcors, notcors)
-    srt = sortperm([setcors; notcors]; rev=true)
-    ranks = invperm(srt)
-    setranks = Set(ranks[1:length(setcors)])
-    
-    setscore =  1 / length(setcors)
-    notscore = -1 / length(notcors)
-    
-    ys = cumsum(i ∈ setranks ? setscore : notscore for i in eachindex(ranks))
-    
-    lower, upper = extrema(ys)
-    return abs(lower) > abs(upper) ? lower : upper
-end
 
 end #module NeuroFSEA
