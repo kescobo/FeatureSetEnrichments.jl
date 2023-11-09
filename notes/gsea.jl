@@ -1,4 +1,5 @@
 using VKCComputing
+using FeatureSetEnrichments
 using BiobakeryUtils
 using DataFrames
 using CSV

@@ -52,6 +52,8 @@ struct FSEAResult
     setranks::Vector{Int}
 end
 
+pvalue(result::FSEAResult) = result.pvalue
+
 function Base.show(io::IO, ::MIME"text/plain", fr::FSEAResult)
     println(io, """
     FSEA Result of dataset with
