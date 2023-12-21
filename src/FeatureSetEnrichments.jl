@@ -15,5 +15,4 @@ import ThreadsX
 include("fsea.jl")
 include("neurofeatures.jl")
 
-
 end # module FeatureSetEnrichments

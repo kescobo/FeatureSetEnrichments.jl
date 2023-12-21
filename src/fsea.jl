@@ -67,7 +67,7 @@ function _run_fsea(perm::Permutation, fset_ranks, nfeatures)
         ses = enrichment_score(rranks, nfeatures)
         es < 0 ? ses < es : ses > es
     end
-    return (lt / nperm, es)
+    return FSEAResult(lt / nperm, nfeatures, fset_ranks)
 end
 
 """

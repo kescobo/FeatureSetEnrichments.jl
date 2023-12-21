@@ -10,5 +10,15 @@ HypothesisTests = "09f84164-cd44-5f33-b23f-e6b0d136a0d5"
 InvertedIndices = "41ab1584-1d38-5bbf-9106-f11c6c58b48f"
 ThreadsX = "ac1d9e8a-700a-412c-b207-f0111f4b6c0d"
 
+[weakdeps]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
+[extensions]
+# name of extension to the left
+# extension dependencies required to load the extension to the right
+# use a list for multiple extension dependencies
+FSEAMakieExt = "Makie"
+
 [compat]
 julia = "1.10"
+
