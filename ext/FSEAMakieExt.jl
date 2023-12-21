@@ -1,9 +1,7 @@
 module FSEAMakieExt
 
-using FeatureSetEnrichments:FSEAResult, enrichment_score
+import FeatureSetEnrichments: _es_at_pos, FSEAResult, enrichment_score
 using Makie
-
-const _es_at_pos = FeatureSetEnrichments._es_at_pos
 
 # function plot_fsea(setcors, notcors; label="", ylabel="enrichment", kwargs...)
 #     fig = Figure()
