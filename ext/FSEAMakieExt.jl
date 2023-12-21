@@ -1,9 +1,9 @@
 module FSEAMakieExt
 
-using FeatureSetEnrichments
-using CairoMakie
+using FeatureSetEnrichments:FSEAResult, enrichment_score
+using Makie
 
-plot!(grid)
+const _es_at_pos = FeatureSetEnrichments._es_at_pos
 
 # function plot_fsea(setcors, notcors; label="", ylabel="enrichment", kwargs...)
 #     fig = Figure()
@@ -11,17 +11,20 @@ plot!(grid)
 #     fig, ax1, ax2
 # end
 
-function _gen_pts(ranks, nfeatures, setscore, notscore)
-    rs = Set(ranks)
-    ys = cumsum(i ∈ setranks ? setscore : notscore for i in eachindex(ranks)) .* -1
-    return
-    
-
+function _gen_pts(setranks, nfeatures, setscore, notscore)
+    pts = Iterators.map(eachindex(setranks)) do i
+        rank = setranks[i]
+        prevrank = rank - 1
+        score = _es_at_pos(rank, i, setscore, notscore)
+        prevscore = score - setscore
+        return ((prevrank, prevscore), (rank, score))
+    end
+    return [(0,0); sort(collect(Iterators.flatten(pts)); lt = (x,y)->x[1]<y[1]); (nfeatures+2,0)]
 end
 
-function plot_fsea!(grid, fr::FSEAResult; title="", ylabel="", linecolor=:gray, kwargs...)
+function Makie.plot!(grid::Makie.GridLayout, fr::FSEAResult; title="", ylabel="", linecolor=:gray, kwargs...)
     nfeatures = fr.nfeatures
-    setranks = fr.setranks
+    setranks = sort(fr.setranks)
     nr = length(setranks)
 
     setscore =  -1 / nr
@@ -29,7 +32,7 @@ function plot_fsea!(grid, fr::FSEAResult; title="", ylabel="", linecolor=:gray, 
     
     pts = _gen_pts(setranks, nfeatures, setscore, notscore)
     
-    t = "ES: $(round(enrichment_score(fullcors, 1:length(setcors)), digits=3))"
+    t = "ES: $(round(enrichment_score(fr), digits=3))"
 
     ax1 = Axis(grid[1,1]; title, ylabel=isempty(ylabel) ? t : ylabel, kwargs...)
     hidexdecorations!(ax1)
@@ -37,8 +40,8 @@ function plot_fsea!(grid, fr::FSEAResult; title="", ylabel="", linecolor=:gray, 
     ax2 = Axis(grid[2,1])
     hidedecorations!(ax2)
     
-    lines!(ax1, xs, ys; color=linecolor)
-    vlines!(ax2, ranks[1:length(setcors)]; color=:black)
+    lines!(ax1, pts; color=linecolor)
+    vlines!(ax2, setranks; color=:black)
     
     rowsize!(grid, 2, Relative(1/8))
     rowgap!(grid, 1, Fixed(0))
@@ -46,6 +49,13 @@ function plot_fsea!(grid, fr::FSEAResult; title="", ylabel="", linecolor=:gray, 
     linkxaxes!(ax1, ax2)
     tightlimits!.((ax1, ax2))
     grid, ax1, ax2
+end
+
+function Makie.plot(fr::FSEAResult; title="", ylabel="", linecolor=:gray, kwargs...)
+    fig = Figure()
+    grid = GridLayout(fig[1,1])
+    (gr, ax1, ax2) = plot!(grid, fr; title, ylabel, linecolor, kwargs...)
+    return fig
 end
 
 # function plot_corrband!(ax, cors; bandres=5000)
